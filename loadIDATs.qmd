@@ -1,0 +1,46 @@
+---
+title: "loadIDATs"
+author: "Darius Mostaghimi"
+format: html
+editor: visual
+---
+
+Initialize, find directories, etc.
+
+```{r}
+#| label: Initialize
+#| eval: true
+#| echo: true
+#| cache: false
+
+set.seed(235813)
+suppressPackageStartupMessages(library(sesame))
+suppressPackageStartupMessages(library(minfi))
+suppressPackageStartupMessages(library(impute)) 
+suppressPackageStartupMessages(library(wateRmelon))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(SummarizedExperiment))
+suppressPackageStartupMessages(library(GenomicRanges))
+suppressPackageStartupMessages(library(gprofiler2))
+
+sesame_checkVersion()
+
+dataDirectory <-"C:/Users/mosta/Documents/Farhadian/Neurosyphilis/data/neurosyphilis_DNAm/IDATS"
+
+sdfs = openSesame(dataDirectory, func = NULL) # return SigDF list
+saveRDS(sdfs, file=paste0(outputs, "objects/", filenamespec,"_rawsdfobject.rds")) 
+
+```
+
+Load data as SigDF file
+
+```{r}
+#| label: Load SigDF files from IDAT files
+#| eval: false
+#| echo: true
+#| cache: false
+
+
+```

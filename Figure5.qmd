@@ -1,0 +1,266 @@
+---
+title: "Figure 5 - CSF DNA Methylation Changes in Neurosyphilis do not resolve following Treatment"
+author: "Darius Mostaghimi"
+format: html
+execute: 
+  echo: false
+  eval: true
+  warning: false
+  message: false
+  cache: false
+editor: visual
+---
+
+## Figure 5: **CSF DNA Methylation Changes in Neurosyphilis do not resolve following Treatment**
+
+```{r}
+#| label: Initialize
+#| eval: true
+#| echo: true
+#| cache: false
+
+set.seed(235813)
+suppressPackageStartupMessages(library(sesame))
+suppressPackageStartupMessages(library(impute)) 
+suppressPackageStartupMessages(library(wateRmelon))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(ggfortify))
+suppressPackageStartupMessages(library(pheatmap))
+suppressPackageStartupMessages(library(gplots))
+sesame_checkVersion()
+
+outputs = "C:/Users/mosta/Documents/Farhadian/Neurosyphilis/git_submission/Fig5/"
+Tissue = "CSF"
+
+metadata <- read.csv("C:/Users/mosta/Documents/Farhadian/Neurosyphilis/data/neurosyphilis_DNAm/IDATS/20230814_sample_metadata.csv")
+sdfs <- readRDS(file="C:/Users/mosta/Documents/Farhadian/Neurosyphilis/20230907_sesame_csfvsblood/outputs/objects/20230907_rawsdfobject.rds") 
+probe.features <- readRDS(file = "C:/Users/mosta/Documents/Farhadian/Neurosyphilis/data/genome_data/epic.v1.probe.features")
+
+```
+
+```{r}
+#| label: Load metadata
+#| eval: true
+#| echo: true
+#| cache: false
+
+metadata$Samples <- paste(metadata$Sentrix_ID, metadata$Sentrix_Position, sep = "_")
+
+#Define what samples are kept
+comparison_group_1 <- "Sample_Group"
+cg1_criteria <- c("csf")
+comparison_group_2 <- "Disease"
+cg2_criteria <- c("neurosyphilis", "syphilis")
+
+##Exclude
+exclude <- c("UW1108WK52CSFDNA", "UW1108DNACSFWK24", "UW1113WK52CSFDNA", "UW1113WK12CSFDNA", "UW1192WK12CSFDNA", "UW1036WK12CSFDNA", "UW1184DNACSF")
+
+#Test between
+group_3 = "Timepoint"
+
+analysis_metadata <- metadata[metadata[,comparison_group_1] %in% cg1_criteria & metadata[,comparison_group_2] %in% cg2_criteria & !metadata$Sample_Name %in% exclude,]
+
+```
+
+```{r}
+#| label: Read common SDF object (all samples), Subset relevant groups
+#| eval: true
+#| echo: true
+#| cache: false
+
+sdfs <- sdfs[which(names(sdfs) %in% analysis_metadata$Samples)]
+saveRDS(sdfs, file=paste0(outputs, "fig5_csf_rawsdfobject.rds"))
+
+```
+
+## **Preprocessing**
+
+Mask non-uniquely mapped probes (Q)
+
+Channel inference (C)
+
+Dye bias correction (D)
+
+pOOBAH (P) - detection p value masking using OOB
+
+Background subtraction (B)
+
+```{r}
+#| label: Preprocessing QCDPB
+#| eval: true
+#| echo: true
+#| cache: false
+
+#Preprocess
+sdf_preped = openSesame(sdfs, prep="QCDPB", func=NULL) 
+
+```
+
+## Generate beta values
+
+```{r}
+#| label: Create a model using betas
+#| eval: true
+#| echo: true
+#| cache: false
+
+#Pull betas from preprocessed SDF
+all_betas = openSesame(sdf_preped, func = getBetas) 
+saveRDS(all_betas, file=paste0(outputs, "fig5_csf_betas_object.rds")) 
+
+```
+
+### Figure 5: Differential methylation in NS does not resolve post-treatment
+
+# Figure 5
+
+### 5-A - PCA
+
+```{r}
+#| cache: true
+
+######Remove all CpGs with any NAs --> Kept for downstream
+# Remove columns with more than a certain threshold of NAs
+threshold <- 0
+# Num CpGs included
+betas_clean <- betas[rowMeans(is.na(betas)) <= threshold,]
+# Perform PCA with the cleaned data
+pca_result <- prcomp(t(betas_clean), scale. = TRUE, center = TRUE)
+pca_scores <- predict(pca_result, newdata = t(betas_clean))
+analysis_metadata <- analysis_metadata[match(colnames(betas), analysis_metadata$Samples),]
+pca_meta <- cbind(analysis_metadata, pca_scores)
+
+# Combine PCA results with metadata
+pca_data <- cbind(pca_result$x, analysis_metadata)
+pca_meta$Sentrix_ID <- as.character(pca_meta$Sentrix_ID)
+
+###PCA Plots 
+#Disease, Timepoint
+figA = ggplot(pca_meta, aes(x = PC1, y = PC2, col = Disease, alpha = Timepoint)) +
+  scale_alpha_manual(values = c("WK0" = 1, "WK12" = .6, "WK24" = .3, "WK52" = .1)) +
+  geom_point(stat = "identity", size = 3) +
+  theme_minimal()
+
+pca_meta$Disease_Timepoint <- paste(pca_meta$Disease, pca_meta$Timepoint, sep = "_")
+figA = ggplot(pca_meta, aes(x = PC1, y = PC2, col = Disease_Timepoint)) +
+  scale_color_manual(name=c("Disease"), values = c("firebrick3", "firebrick1", "lightpink2", "pink", "#00BFC4"), labels=c('Neurosyphilis_WK0', 'Neurosyphilis_WK12', 'Neurosyphilis_WK24', 'Neurosyphilis_WK52', 'Non-neurosyphilis')) +
+  geom_point(stat = "identity", size = 3) +
+  theme_minimal()
+
+figA
+
+```
+
+### 5-B - DMPs Over Time
+
+```{r}
+#| cache: true
+
+#Load DMPs from Week 0 CSF
+DMPs_acute <- readRDS("C:/Users/mosta/Documents/Farhadian/Neurosyphilis/git_submission/Fig2/fig2_dmps_object.rds")
+probe.features <- readRDS(file = "C:/Users/mosta/Documents/Farhadian/Neurosyphilis/data/genome_data/epic.v1.probe.features")
+probe.features$CpG <- rownames(probe.features)
+
+#Define significant DMPs by FDR and effect size threshold
+adjFDR_threshold <- 0.01
+Effect_size_threshold <- 0.1
+sig_cpgs_fromdmp <- DMPs_acute %>% dplyr::filter(adjFDR < adjFDR_threshold, Eff_Disease > Effect_size_threshold) %>% arrange(FPval_Disease)
+sig_cpgs_fromdmp <- sig_cpgs_fromdmp %>% dplyr::arrange(adjFDR)
+
+#Create dataframe with metadata, CpG info
+analysis_metadata <- analysis_metadata[match(colnames(all_betas), analysis_metadata$Samples),]
+beta_metadata <- cbind(analysis_metadata, as.data.frame(t(all_betas)))
+common_cols <- colnames(analysis_metadata)
+col_keep <- c(common_cols, sig_cpgs_fromdmp$Probe_ID)
+beta_sig <- beta_metadata[,col_keep]
+
+#Using Acute DMPs, do Rank Sums tests on these CpGs between Acute NS vs Long NS, and between Acute S vs Long NS
+#Value returned as long as there are not >= 2 good samples being compared at all times
+sig_cpgs_fromdmp <- cbind(sig_cpgs_fromdmp, do.call(rbind, lapply(1:nrow(sig_cpgs_fromdmp), function(m) {
+  beta_sig_temp <- beta_sig[beta_sig$Disease %in% c("neurosyphilis"), c("Timepoint", "Disease", "Subject", sig_cpgs_fromdmp[m,"Probe_ID"])]
+  beta_sig_temp_wide <- beta_sig_temp %>%
+  pivot_wider(names_from = c(Timepoint), values_from = sig_cpgs_fromdmp[m,"Probe_ID"])
+  beta_sig_temp_wide$WK12Dif <- as.numeric(beta_sig_temp_wide$WK12) - as.numeric(beta_sig_temp_wide$WK0)
+  x = as.numeric(beta_sig[beta_sig$Timepoint %in% c("WK0") & beta_sig$Disease %in% c("neurosyphilis"),sig_cpgs_fromdmp[m,"Probe_ID"]])
+  y = as.numeric(beta_sig[beta_sig$Timepoint %in% c("WK12"),sig_cpgs_fromdmp[m,"Probe_ID"]])
+  z = as.numeric(beta_sig[beta_sig$Disease %in% c("syphilis"),sig_cpgs_fromdmp[m,"Probe_ID"]])
+  q = beta_sig_temp_wide$WK12Dif[!is.na(beta_sig_temp_wide$WK12Dif)]
+  if(sum(is.finite(x)) <= 1 | sum(is.finite(y)) <= 1){
+    pval_a <- NA
+    pval_a_adj <- NA
+  } else {
+    #Rank Sum P value
+    pval_a <- wilcox.test(x, y, na.action = na.omit)$p.value
+    pval_a_adj <- p.adjust(pval_a, n = nrow(sig_cpgs_fromdmp), method = "BH")
+  }
+  if(sum(is.finite(y)) <= 1 | sum(is.finite(z)) <= 1){
+    pval_b <- NA
+    pval_b_adj <- NA
+  } else {
+    #Rank Sum P value
+    pval_b <- p.adjust(wilcox.test(y, z, na.action = na.omit)$p.value, n = nrow(sig_cpgs_fromdmp), method = "none")
+    pval_b_adj <- p.adjust(pval_b, n = nrow(sig_cpgs_fromdmp), method = "BH")
+  }
+  if(sum(is.finite(q)) <= 2){
+    wk12dir <- NA
+    tobaseline <- NA
+  } else {
+    wk12dir <- ifelse(all(q > 0), 1, ifelse(all(q < 0), -1, 0))
+    tobaseline <- ifelse((wk12dir  == 1 & mean(x, na.rm = TRUE) < mean(y, na.rm = TRUE)) | (wk12dir  == -1 & mean(x, na.rm = TRUE) > mean(y, na.rm = TRUE)), 1, 0) 
+  }
+  return(c("mean_WK0_NS" = as.numeric(mean(x, na.rm = TRUE)), "mean_WK12_NS" = mean(y, na.rm = TRUE), "mean_WK0_S" = as.numeric(mean(z, na.rm = TRUE)), "pval.vs.long.NS" = as.numeric(pval_a), "padj.vs.long.NS" = as.numeric(pval_a_adj), "pval.long.NS.vs.acute.S" = as.numeric(pval_b), "padj.long.NS.vs.vs.acute.S" = as.numeric(pval_b_adj), WK12Direction = wk12dir, ToBaseline = tobaseline))
+})))
+
+sig_cpgs_fromdmp <- sig_cpgs_fromdmp[order(sig_cpgs_fromdmp$pval.vs.long.NS, decreasing = TRUE),]
+
+#Choose 3 CpGs that are from either only sig vs Baseline NS or only sig vs Baseline S
+##To baseline
+sigvsNS <- sig_cpgs_fromdmp[sig_cpgs_fromdmp$pval.vs.long.NS < 0.05 & sig_cpgs_fromdmp$pval.long.NS.vs.acute.S > 0.05,]
+sigvsNS <- sigvsNS[order(sigvsNS$pval.vs.long.NS, decreasing = FALSE),]
+##Not to baseline
+sigvsS <- sig_cpgs_fromdmp[sig_cpgs_fromdmp$pval.vs.long.NS > 0.05 & sig_cpgs_fromdmp$pval.long.NS.vs.acute.S < 0.05,]
+sigvsS <- sigvsS[order(sigvsS$pval.long.NS.vs.acute.S, decreasing = FALSE),]
+
+#Plot first 3 that are NS returning to baseline, then last 3 are NS not returning to baseline
+not_to_baseline <- c("cg26329756", "cg16717990", "cg24735671")
+to_baseline <- c("cg04918364", "cg24620635", "cg13775629")
+plot_cpgs <- c(not_to_baseline, to_baseline)
+beta_temp <- beta_sig[, c(common_cols, plot_cpgs)]
+
+#Create long dataframe
+beta_temp_long <- beta_temp %>% dplyr::select(all_of(colnames(beta_temp))) %>%  pivot_longer(cols = -c(common_cols), names_to = "CpG", values_to = "Beta")
+
+beta_temp_long$Disease <- factor(beta_temp_long$Disease, levels = c("syphilis", "neurosyphilis"))
+
+beta_temp_long <- merge(beta_temp_long, probe.features[,c("CpG", "EPIC.gene", "feature")], by = "CpG", all.x = TRUE, all.y = FALSE)
+
+beta_temp_long$CpG <- factor(beta_temp_long$CpG, levels = plot_cpgs)
+
+custom_labeller <- function(value) {
+    gene_name <- beta_temp_long$EPIC.gene[match(value, beta_temp_long$CpG)]
+    cpg_name <- beta_temp_long$CpG[match(value, beta_temp_long$CpG)]
+    feature_name <- beta_temp_long$feature[match(value, beta_temp_long$CpG)]
+    return(paste(gene_name, ": ", cpg_name))
+}
+
+#Plot
+figB = ggplot(beta_temp_long, aes(x = Timepoint, y = Beta, color = Disease)) +
+  geom_boxplot() +
+  geom_line(aes(group = Subject)) + 
+  geom_point(position = position_jitterdodge(
+    jitter.width = 0.2, dodge.width = 0.8)) +
+  scale_color_manual(values = c("#00BFC4", "#F8766D"), breaks = c("syphilis", "neurosyphilis"), labels = c("Non-neurosyphilis", "Neurosyphilis")) +
+  labs(x = "Timepoint", y = "Beta") + 
+  theme(legend.position = "bottom") +
+  facet_wrap(~CpG, scales = "free_y", ncol = 3, labeller = as_labeller(custom_labeller))+
+  theme(panel.background = element_blank(),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA),
+        panel.grid.major = element_line(color = "grey95"),
+        panel.grid.minor = element_line(color = "grey98")
+    )
+
+figB
+```

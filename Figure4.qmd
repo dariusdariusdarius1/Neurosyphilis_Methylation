@@ -1,0 +1,363 @@
+---
+title: "Figure 4 - Epigenetic differences in Neurosyphilis correspond to Transcriptional Changes in the CSF"
+author: "Darius Mostaghimi"
+format: html
+execute: 
+  echo: false
+  eval: true
+  warning: false
+  message: false
+  cache: false
+editor: visual
+---
+
+## Figure 4: Epigenetic differences in Neurosyphilis correspond to Transcriptional Changes in the CSF
+
+```{r}
+#| label: Initialize
+#| eval: true
+#| echo: true
+#| cache: false
+
+set.seed(235813)
+suppressPackageStartupMessages(library(sesame))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(gprofiler2))
+suppressPackageStartupMessages(library(ggfortify))
+suppressPackageStartupMessages(library(pheatmap))
+suppressPackageStartupMessages(library(gplots))
+suppressPackageStartupMessages(library(ggforce))
+suppressPackageStartupMessages(library(ggpubr))
+suppressPackageStartupMessages(library(rstatix))
+sesame_checkVersion()
+
+outputs = "C:/Users/mosta/Documents/Farhadian/Neurosyphilis/git_submission/Fig4/"
+Tissue = "CSF"
+
+metadata <- read.csv("C:/Users/mosta/Documents/Farhadian/Neurosyphilis/data/neurosyphilis_DNAm/IDATS/20230814_sample_metadata.csv")
+probe.features <- readRDS(file = "C:/Users/mosta/Documents/Farhadian/Neurosyphilis/data/genome_data/epic.v1.probe.features")
+rna_counts <- read.table("C:/Users/mosta/Documents/Farhadian/Neurosyphilis/GEO submission/rna data/rna-tpm-table.txt", sep="\t", header=TRUE)
+betas <- readRDS(file="C:/Users/mosta/Documents/Farhadian/Neurosyphilis/git_submission/Fig2/fig2_csf_betas_object.rds")
+DMPs <- readRDS(file="C:/Users/mosta/Documents/Farhadian/Neurosyphilis/git_submission/Fig2/fig2_dmps_object.rds")
+```
+
+```{r}
+metadata$Samples <- paste(metadata$Sentrix_ID, metadata$Sentrix_Position, sep = "_")
+
+#Define what samples are kept
+comparison_group_1 <- "Sample_Group"
+cg1_criteria <- c("csf")
+comparison_group_2 <- "Timepoint"
+cg2_criteria <- c("WK0")
+
+##Exclude
+#exclude <- c("207012190147_R06C01", "206451050001_R06C01")
+exclude <- c("206451050001_R06C01")
+
+#Test between
+group_3 = "Disease"
+
+analysis_metadata <- metadata[metadata[,comparison_group_1] %in% cg1_criteria & metadata[,comparison_group_2] %in% cg2_criteria & !metadata$Samples %in% exclude,]
+```
+
+### 4-A - DMP correlation with RNAs
+
+```{r}
+#| cache: true
+
+#Load significant DMPs by FDR and effect size threshold
+adjFDR_threshold <- 0.01
+Effect_size_threshold <- 0.1
+
+sig_cpgs_fromdmp <- DMPs %>% dplyr::filter(adjFDR < adjFDR_threshold, Eff_Disease > Effect_size_threshold) %>% arrange(FPval_Disease)
+sig_cpgs_fromdmp$Meth.direction  <- ifelse(sig_cpgs_fromdmp$Est_Diseaseneurosyphilis > 0, "Pos", "Neg")
+
+##Keep genes that are DMPs and are well-represented in RNA-seq dataset
+
+#Create dataframe with CpGs and RNAs
+analysis_metadata <- analysis_metadata[match(colnames(betas), analysis_metadata$Samples),]
+beta_metadata <- cbind(analysis_metadata, as.data.frame(t(betas)))
+
+#Create dataframe with metadata, CpG info, and RNA info -- union of methylation and RNA samples 
+rownames(rna_counts) <- rna_counts$gene_id
+rna_counts <- rna_counts[,2:ncol(rna_counts)]
+colnames(rna_counts) <- gsub("RNA", "DNA", colnames(rna_counts))
+rna_metadata <- metadata[match(colnames(rna_counts), metadata$Sample_Name),]
+rna_metadata$RNA <- TRUE
+rna_metadata <- cbind(rna_metadata, as.data.frame(t(rna_counts)))
+overlapping_samples <- intersect(rna_metadata$Sample_Name, beta_metadata$Sample_Name)
+overlapping_columns <- intersect(colnames(rna_metadata), colnames(beta_metadata))
+rna_cpg_frame <- rna_metadata[rna_metadata$Sample_Name %in% overlapping_samples,]
+beta_metadata_temp <- beta_metadata[beta_metadata$Sample_Name %in% overlapping_samples,]
+rna_cpg_frame <- rna_cpg_frame[match(beta_metadata_temp$Sample_Name, rna_cpg_frame$Sample_Name),]
+rna_cpg_frame <- cbind(rna_cpg_frame, beta_metadata_temp[,!colnames(beta_metadata_temp) %in% c(overlapping_columns)])
+rna_cpg_frame <- bind_rows(rna_cpg_frame, rna_metadata[!rna_metadata$Sample_Name %in% overlapping_samples,], beta_metadata[!beta_metadata$Sample_Name %in% overlapping_samples,], )
+rm(beta_metadata_temp, rna_counts, rna_metadata, beta_metadata)
+rna_cpg_frame$RNA <- ifelse(is.na(rna_cpg_frame$RNA) == TRUE, FALSE, TRUE)
+
+#Remove columns with all NAs
+fortified_rna_cpg_frame <- rna_cpg_frame[,colSums(!is.na(rna_cpg_frame))>0]
+common_cols <- colnames(fortified_rna_cpg_frame)[1:50]
+genes_in_both <- intersect(sig_cpgs_fromdmp$EPIC.gene, colnames(fortified_rna_cpg_frame))
+
+sig_genes_from_cpgs <- sig_cpgs_fromdmp[sig_cpgs_fromdmp$EPIC.gene %in% genes_in_both,c("Probe_ID", "EPIC.gene", "Meth.direction")]
+
+sig_genes_from_cpgs <- as.data.frame(apply(sig_genes_from_cpgs, 2, as.character))
+
+#Number unique genes
+dim((sig_genes_from_cpgs))
+
+#Do correlation statistics rna x cpg
+sig_genes_from_cpgs <- suppressWarnings(cbind(sig_genes_from_cpgs, do.call(rbind, lapply(1:nrow(sig_genes_from_cpgs), function(m) {
+  x = as.numeric(fortified_rna_cpg_frame[fortified_rna_cpg_frame$Timepoint == "WK0",sig_genes_from_cpgs[m,"Probe_ID"]])
+  y = as.numeric(fortified_rna_cpg_frame[fortified_rna_cpg_frame$Timepoint == "WK0",sig_genes_from_cpgs[m,"EPIC.gene"]])
+  #Rank Sum P value, with BH adjustment
+  cor.test <- cor.test(x, y, na.action = na.omit, method = "spearman")
+  pval <- p.adjust(cor.test$p.value, n = nrow(sig_genes_from_cpgs), method = "none")
+  #Correlation
+  cor <- cor.test$estimate
+  names(cor) <- "spearman.cor"
+  pearson <- cor.test(x, y, na.action = na.omit, method = "pearson")
+  pearson.pval <- p.adjust(pearson$p.value, n = nrow(sig_genes_from_cpgs), method = "none")
+  pearson.cor <- pearson$estimate
+  names(pearson.cor) <- "pearson.cor"
+  return(c(spearman.pval = pval, cor, pearson.pval = pearson.pval, pearson.cor))
+}))))
+
+sig_genes_from_cpgs$spearman.padj <- p.adjust(sig_genes_from_cpgs$spearman.pval, n = nrow(sig_genes_from_cpgs), method = "BH")
+
+sig_genes_from_cpgs <- sig_genes_from_cpgs[order(sig_genes_from_cpgs$spearman.pval, decreasing = FALSE),]
+
+#Merge with genome data features
+sig_correlations <- sig_genes_from_cpgs %>% dplyr::filter(spearman.pval < 0.05)
+com.idx <- intersect(sig_correlations$Probe_ID, rownames(probe.features))
+colnames(probe.features)[5] <- "EPIC.gene"
+sig_correlations <- sig_correlations[sig_correlations$Probe_ID %in% com.idx,]
+order_vector <- match(com.idx, rownames(probe.features))
+temp_probe_features <- probe.features[order_vector,]
+sig_correlations <- cbind(sig_correlations, temp_probe_features[,setdiff(colnames(temp_probe_features), "EPIC.gene")])
+
+common_cols <- colnames(fortified_rna_cpg_frame)[1:50]
+genes_in_both <- intersect(sig_correlations$EPIC.gene, colnames(fortified_rna_cpg_frame))
+cpgs_in_both <- intersect(sig_correlations$Probe_ID, colnames(fortified_rna_cpg_frame))
+
+temp_long <- fortified_rna_cpg_frame[, c(common_cols, genes_in_both, cpgs_in_both)]
+
+#Multistep conversion to long - gene then cpg
+temp_long <- temp_long %>% 
+  dplyr::select(all_of(genes_in_both), everything()) %>%
+  pivot_longer(cols = -c(common_cols, cpgs_in_both), names_to = "EPIC.gene", values_to = "expression") %>% as.data.frame()
+
+sig_long_frame <- temp_long %>% 
+  dplyr::select(all_of(cpgs_in_both), everything()) %>%
+  pivot_longer(cols = -c(common_cols, "EPIC.gene", "expression"), names_to = "cpg", values_to = "beta") %>% as.data.frame()
+
+##Positively correlated genes x cpgs 
+pos_sig_cor <- sig_correlations[sig_correlations$spearman.cor > 0, c("Probe_ID", "EPIC.gene", "spearman.pval", "spearman.padj", "pearson.cor", "feature", "Meth.direction", "spearman.cor")]
+
+#Restrict to RNAs that are associated with specific CpG (ensure only 1 gene correlated with 1 cpg)
+pos_sig_frame <- data.frame()
+for(b in 1:nrow(pos_sig_cor)) {
+  pos_sig_frame <- rbind(pos_sig_frame, sig_long_frame[sig_long_frame$EPIC.gene %in% pos_sig_cor[b,]$EPIC.gene & sig_long_frame$cpg %in% pos_sig_cor[b,]$Probe_ID,])
+}
+
+##Negatively correlated cpgs x rna
+neg_sig_cor <- sig_correlations[sig_correlations$spearman.cor < 0, c("Probe_ID", "EPIC.gene", "spearman.pval", "spearman.padj", "pearson.cor", "feature", "Meth.direction", "spearman.cor")]
+
+#Restrict to RNAs that are associated with specific CpG (ensure only 1 gene correlated with 1 cpg)
+neg_sig_frame <- data.frame()
+for(b in 1:nrow(neg_sig_cor)) {
+  neg_sig_frame <- rbind(neg_sig_frame, sig_long_frame[sig_long_frame$EPIC.gene %in% neg_sig_cor[b,]$EPIC.gene & sig_long_frame$cpg %in% neg_sig_cor[b,]$Probe_ID,])
+}
+
+##Plot special 6 CpGs vs RNAs
+keep_cpgs <- c("CXCR5", "GNLY", "PRF1", "INSR","IGF2R", "LDHA")
+keep_cpgs_frame <- sig_correlations[sig_correlations$EPIC.gene %in% keep_cpgs,]
+
+keep_sig_frame <- data.frame()
+for(b in 1:nrow(keep_cpgs_frame)) {
+  keep_sig_frame <- rbind(keep_sig_frame, sig_long_frame[sig_long_frame$EPIC.gene %in% keep_cpgs_frame[b,]$EPIC.gene & sig_long_frame$cpg %in% keep_cpgs_frame[b,]$Probe_ID,])
+}
+keep_cpgs_frame$EPIC.gene <- factor(keep_cpgs_frame$EPIC.gene, levels = keep_cpgs)
+keep_sig_frame$EPIC.gene <- factor(keep_sig_frame$EPIC.gene, levels = keep_cpgs)
+keep_sig_frame$EPIC.gene <- factor(keep_sig_frame$EPIC.gene, levels = keep_cpgs)
+
+custom_labeller <- function(value) {
+    gene_name <- keep_cpgs_frame$EPIC.gene[match(value, keep_cpgs_frame$EPIC.gene)]
+    cpg_name <- keep_cpgs_frame$Probe_ID[match(value, keep_cpgs_frame$EPIC.gene)]
+    return(paste(gene_name, "vs.", cpg_name))
+}
+
+figA = ggplot(keep_sig_frame[keep_sig_frame$Timepoint == "WK0",], aes(x = beta, y = expression)) +
+  geom_point(aes(col = Disease)) +
+  geom_smooth(method = lm, se = TRUE, col = 'black', linewidth = 1) +
+  facet_wrap(~ EPIC.gene, scales = "free", labeller = as_labeller(custom_labeller)) +
+  scale_color_discrete(name=c("Disease"), labels=c('Neurosyphilis','Non-neurosyphilis')) +
+  geom_text(data = keep_cpgs_frame, aes(label = paste(" rho =", round(spearman.cor, 2), "\n", "p=", round(spearman.pval, 4))), x = -Inf, y = Inf, hjust = 0, vjust = 1, size = 3, color = "black") +
+  labs(x = "Beta", y = "Normalized RNA Expression") +
+  theme(
+        legend.position = "none",
+        panel.background = element_blank(),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA),
+        panel.grid.major = element_line(color = "grey95"),
+        panel.grid.minor = element_line(color = "grey98")
+    )
+figA
+
+```
+
+#### Supp. Table - DMPs Significantly Correlated with RNAs
+
+```{r}
+
+write.csv(sig_correlations, file="C:/Users/mosta/Documents/Farhadian/Neurosyphilis/git_submission/Fig4/supp.csf.ns.vs.s.dmps.cor.rnas.csv")
+print("supp.csf.ns.vs.s.dmps.cor.rnas.csv")
+```
+
+### 4-B - DE RNAs Among DMPs
+
+```{r}
+#| label: RNA of significant DMPs, vs Long
+#| cache: true
+#| fig-width: 6.5
+#| fig-height: 7.5
+
+#Filter gene expression among the significantly differentially expressed CpGs
+genes_in_both <- intersect(sig_cpgs_fromdmp$EPIC.gene, colnames(fortified_rna_cpg_frame))
+
+sig_genes_from_cpgs <- sig_cpgs_fromdmp[sig_cpgs_fromdmp$EPIC.gene %in% genes_in_both,c("Probe_ID", "EPIC.gene", "feature", "Meth.direction")]
+sig_genes_from_cpgs <- as.data.frame(apply(sig_genes_from_cpgs, 2, as.character))
+
+#Perform differential expression tests for RNAs among DMPs
+sig_genes_from_cpgs <- suppressWarnings(cbind(sig_genes_from_cpgs, do.call(rbind, lapply(1:nrow(sig_genes_from_cpgs), function(m) {
+  x = as.numeric(fortified_rna_cpg_frame[fortified_rna_cpg_frame$Timepoint == "WK0" & fortified_rna_cpg_frame$Disease == "neurosyphilis",sig_genes_from_cpgs[m,"EPIC.gene"]])
+  y = as.numeric(fortified_rna_cpg_frame[fortified_rna_cpg_frame$Timepoint == "WK0" & fortified_rna_cpg_frame$Disease == "syphilis",sig_genes_from_cpgs[m,"EPIC.gene"]])
+  #Rank Sum P value
+  pval <- p.adjust(wilcox.test(x, y, na.action = na.omit)$p.value, n = nrow(sig_genes_from_cpgs), method = "none")
+  dir <- ifelse(mean(x, na.rm = TRUE) > mean(y, na.rm = TRUE), "Pos", ifelse(mean(x, na.rm = TRUE) < mean(y, na.rm = TRUE), "Neg", "Even"))
+  return(c(RNA.direction = dir, pval = pval))
+}))))
+
+sig_genes_from_cpgs$padj <- p.adjust(sig_genes_from_cpgs$pval, method = "BH")
+sig_genes_from_cpgs <- sig_genes_from_cpgs[order(sig_genes_from_cpgs$pval, decreasing = FALSE),]
+
+#Number significant DMPs that are correlated with RNA seq expression with Padj value < 0.05
+sig_correlations <- sig_genes_from_cpgs %>% dplyr::filter(pval < 0.05) %>% dplyr::arrange(pval)
+
+#Merge with genome data features
+com.idx <- intersect(sig_correlations$Probe_ID, rownames(probe.features))
+sig_correlations <- sig_correlations[sig_correlations$Probe_ID %in% com.idx,]
+order_vector <- match(com.idx, rownames(probe.features))
+temp_probe_features <- probe.features[order_vector,]
+sig_correlations <- cbind(sig_correlations, temp_probe_features)
+
+#Differentially methylated CpGs that are also differentially expressed
+cpgs_in_both <- intersect(sig_correlations$Probe_ID, colnames(fortified_rna_cpg_frame))
+
+#Pare down large frame to only include relevant CpGs and Genes
+temp_long <- fortified_rna_cpg_frame[, c(common_cols, genes_in_both, cpgs_in_both)]
+
+#Multistep conversion to long - gene then cpg
+temp_long <- temp_long %>% 
+  dplyr::select(all_of(genes_in_both), everything()) %>%
+  pivot_longer(cols = -c(common_cols, cpgs_in_both), names_to = "EPIC.gene", values_to = "expression") %>% as.data.frame()
+
+sig_long_frame <- temp_long %>% 
+  dplyr::select(all_of(cpgs_in_both), everything()) %>%
+  pivot_longer(cols = -c(common_cols, "EPIC.gene", "expression"), names_to = "cpg", values_to = "beta") %>% as.data.frame()
+
+#genes to plot
+plot_genes <- c("CXCR5", "IFNAR2", "TLR7", "NOD2", "TAPBP", "IDE", "IGF1R", "LDHA", "TXN2", "AQP11", "ATG7", "ZFPM1")
+
+sig_long_frame <- sig_long_frame[sig_long_frame$EPIC.gene %in% plot_genes & sig_long_frame$Timepoint %in% c("WK0"),]
+
+sig_long_frame$gene.2 <- sig_long_frame$EPIC.gene
+sig_long_frame$cpg.2 <- sig_long_frame$cpg
+
+sig_long_frame <- sig_long_frame %>% 
+  dplyr::select(all_of(c("EPIC.gene", "cpg")), everything()) %>%
+  pivot_longer(cols = -c(setdiff(colnames(sig_long_frame), c("EPIC.gene", "cpg"))), names_to = "experiment", values_to = "marker") %>% as.data.frame()
+
+sig_long_frame <- sig_long_frame %>% 
+  dplyr::select(all_of(c("expression", "beta")), everything()) %>%
+  pivot_longer(cols = -c(setdiff(colnames(sig_long_frame), c("expression", "beta"))), names_to = "value_type", values_to = "Value") %>% as.data.frame()
+
+#ensure genes match up with expression, and cpg matches up with beta
+sig_long_frame <- sig_long_frame[(sig_long_frame$experiment == "EPIC.gene" & sig_long_frame$value_type == "expression") | (sig_long_frame$experiment == "cpg" & sig_long_frame$value_type == "beta"),]
+
+sig_frame <- sig_correlations[sig_correlations$EPIC.gene %in% plot_genes,]
+sig_frame <- sig_frame[duplicated(sig_frame$EPIC.gene) == FALSE,]
+
+#Prep for plotting
+plot_sig_frame <- data.frame()
+for(b in 1:nrow(sig_frame)) {
+  plot_sig_frame <- rbind(plot_sig_frame, sig_long_frame[sig_long_frame$gene.2 %in% sig_frame[b,]$EPIC.gene & sig_long_frame$cpg.2 %in% sig_frame[b,]$Probe_ID,])
+}
+unique_markers <- unique(plot_sig_frame$marker)
+probe.features$marker <- rownames(probe.features)
+
+plot_sig_frame <- merge(plot_sig_frame, probe.features[,c("marker", "feature")], all.x = TRUE, all.y = FALSE)
+plot_sig_frame$feature <- as.character(plot_sig_frame$feature)
+plot_sig_frame$feature <- sapply(plot_sig_frame$feature, function(x) {ifelse(is.na(x) == TRUE, "EPIC.gene", x)})
+plot_sig_frame$marker <- factor(plot_sig_frame$marker, levels = unique_markers)
+
+#Label CpGs name with gene name
+custom_labeller <- function(value) {
+  gene_name <- plot_sig_frame$gene.2[match(value, plot_sig_frame$marker)]
+  cpg_name <- plot_sig_frame$cpg.2[match(value, plot_sig_frame$marker)]
+  return(paste(gene_name, ": ", cpg_name))
+}
+#Plot CpGs
+cpg_plot = ggplot(plot_sig_frame[plot_sig_frame$gene.2 %in% c("IFNAR2", "IDE", "IGF1R", "ZFPM1", "ATG7") & plot_sig_frame$value_type == "beta",], aes(x = feature, y = Value, color = Disease)) +
+  geom_boxplot() +
+  geom_point(position = position_jitterdodge(
+    jitter.width = 0.2, dodge.width = 0.8)) +
+  facet_wrap(~ marker, scales = "free", ncol = 1, labeller = as_labeller(custom_labeller)) +
+  labs(x = "Feature", y = "Beta") + 
+  scale_color_discrete(name=c("Disease"), breaks=c("neurosyphilis", "syphilis"), labels=c('Neurosyphilis','Non-neurosyphilis')) +
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        panel.background = element_blank(),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA),
+        panel.grid.major = element_line(color = "grey95"),
+        panel.grid.minor = element_line(color = "grey98")
+    )
+cpg_plot
+
+#Plot Gene expression
+gene_plot = ggplot(plot_sig_frame[plot_sig_frame$gene.2 %in% c("IFNAR2", "IDE", "IGF1R", "ZFPM1", "ATG7") & plot_sig_frame$value_type == "expression",], aes(x = feature, y = Value, color = Disease)) +
+  geom_boxplot() +
+  geom_point(position = position_jitterdodge(
+    jitter.width = 0.2, dodge.width = 0.8)) +
+  facet_wrap(~ marker, scales = "free", ncol = 1, ) +
+  labs(x = " ", y = "Normalized RNA Expression") + 
+  theme(axis.text.x= element_blank()) +
+  scale_color_discrete(name=c("Disease"), breaks=c("neurosyphilis", "syphilis"), labels=c('Neurosyphilis','Non-neurosyphilis')) +
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        panel.background = element_blank(),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA),
+        panel.grid.major = element_line(color = "grey95"),
+        panel.grid.minor = element_line(color = "grey98")
+    )
+
+gene_plot
+
+#Plot CpGs with gene expression side-by-side
+figB = ggarrange(cpg_plot, gene_plot, common.legend = TRUE, legend = "bottom")
+figB
+```
+
+#### Supp. Table - DE RNAs Among DMPs
+
+```{r}
+write.csv(sig_correlations, file="C:/Users/mosta/Documents/Farhadian/Neurosyphilis/git_submission/Fig4/supp.csf.ns.vs.s.dmps.cor.de.rnas.csv")
+print("supp.csf.ns.vs.s.dmps.cor.de.rnas.csv")
+```

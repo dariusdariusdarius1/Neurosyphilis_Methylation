@@ -1,0 +1,586 @@
+---
+title: "Figure 2 - Immune Cells in CSF are Differentially Methylated in Neurosyphilis compared to Non-neurosyphilis"
+author: "Darius Mostaghimi"
+format: html
+execute: 
+  echo: true
+  warning: false
+  message: false
+  cache: false
+editor: visual
+bibliography: references.bib
+---
+
+## Figure 2 - Immune Cells in CSF are Differentially Methylated in Neurosyphilis compared to Non-neurosyphilis
+
+Initialize, find directories, etc.
+
+```{r}
+#| label: Initialize
+#| eval: true
+#| echo: true
+#| cache: false
+
+set.seed(235813)
+suppressPackageStartupMessages(library(sesame))
+suppressPackageStartupMessages(library(minfi))
+suppressPackageStartupMessages(library(impute)) 
+suppressPackageStartupMessages(library(wateRmelon))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(gprofiler2))
+suppressPackageStartupMessages(library(ggfortify))
+suppressPackageStartupMessages(library(pheatmap))
+suppressPackageStartupMessages(library(gplots))
+suppressPackageStartupMessages(library(ggforce))
+suppressPackageStartupMessages(library(ggpubr))
+suppressPackageStartupMessages(library(rstatix))
+suppressPackageStartupMessages(library(EpiDISH))
+sesame_checkVersion()
+
+outputs = "C:/Users/mosta/Documents/Farhadian/Neurosyphilis/git_submission/Fig2/"
+Tissue = "CSF"
+
+metadata <- read.csv("C:/Users/mosta/Documents/Farhadian/Neurosyphilis/data/neurosyphilis_DNAm/IDATS/20230814_sample_metadata.csv")
+sdfs <- readRDS(file="C:/Users/mosta/Documents/Farhadian/Neurosyphilis/20230907_sesame_csfvsblood/outputs/objects/20230907_rawsdfobject.rds") 
+#Probe features - EPICv1.0 from https://zwdzwd.github.io/InfiniumAnnotation 
+probe.features <- readRDS(file = "C:/Users/mosta/Documents/Farhadian/Neurosyphilis/data/genome_data/epic.v1.probe.features")
+
+```
+
+## Load Files
+
+Exclude Samples based off these criteria:
+
+```{r}
+#| label: Load metadata
+#| eval: true
+#| echo: true
+#| cache: false
+
+metadata$Samples <- paste(metadata$Sentrix_ID, metadata$Sentrix_Position, sep = "_")
+
+#Define what samples are kept
+comparison_group_1 <- "Sample_Group"
+cg1_criteria <- c("csf")
+comparison_group_2 <- "Timepoint"
+cg2_criteria <- c("WK0")
+
+##Exclude low quality sample
+exclude <- c("206451050001_R06C01")
+
+#Test between
+group_3 = "Disease"
+
+analysis_metadata <- metadata[metadata[,comparison_group_1] %in% cg1_criteria & metadata[,comparison_group_2] %in% cg2_criteria & !metadata$Samples %in% exclude,]
+analysis_metadata %>% group_by(Disease) %>% summarise(n())
+
+```
+
+```{r}
+#| label: Read common SDF object (all samples), Subset relevant groups
+#| eval: true
+#| echo: true
+#| cache: false
+
+sdfs <- sdfs[which(names(sdfs) %in% analysis_metadata$Samples)]
+saveRDS(sdfs, file=paste0(outputs, "fig2_csf_rawsdfobject.rds")) 
+
+```
+
+Intensity vs Betas
+
+```{r}
+#| label: Plot intensity vs Betas from raw IDATs
+#| eval: true
+#| echo: true
+#| cache: true
+
+lapply(sdfs[1:5], sesameQC_plotIntensVsBetas)
+```
+
+## Raw QC
+
+```{r}
+#| label: Generate QC files from raw loaded IDATs
+#| eval: true
+#| echo: true
+#| cache: false
+
+rawQC = openSesame(sdfs, prep="", func=sesameQC_calcStats)
+rawQC_frame <- (do.call(rbind, lapply(rawQC, as.data.frame)))
+
+```
+
+All bar plots of raw QC
+
+```{r}
+#| label: Plot QC files from raw IDATs
+#| eval: true
+#| echo: true
+#| cache: true
+
+rawQC_frame$sample <- rownames(rawQC_frame)
+for (k in colnames(rawQC_frame)[1:length(colnames(rawQC_frame))-1]) {
+  subset_frame <- data.frame(sample = rawQC_frame$sample, value = rawQC_frame[,k])
+  plot <- ggplot(subset_frame, aes(x = sample, y = value)) +
+  geom_bar(stat = "identity") +
+  labs(title = k) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(x = "Categories", y = "Values")
+  print(plot)
+}
+
+```
+
+## **Preprocessing**
+
+Mask non-uniquely mapped probes (Q)
+
+Channel inference (C)
+
+Dye bias correction (D)
+
+pOOBAH (P) - detection p value masking using OOB
+
+Background subtraction (B)
+
+```{r}
+#| label: Preprocessing QCDPB
+#| eval: false
+#| echo: true
+#| cache: false
+
+#Preprocess
+sdf_preped = openSesame(sdfs, prep="QCDPB", func=NULL) 
+
+```
+
+#Map before and after background subtraction (using NOOB)
+
+```{r}
+#| label: Map betas before and after background subtraction (NOOB)
+#| eval: true
+#| echo: true
+#| cache: true
+
+#Subset 20000 probes from each sample for computational simplicity
+combo_sdf <- lapply(sdfs, function(df) {df %>% sample_n(20000, replace = FALSE)})
+combo_sdf <- do.call(rbind, combo_sdf)
+combo_sdf_preped <- lapply(sdf_preped, function(df) {df %>% sample_n(20000, replace = FALSE)})
+combo_sdf_preped <- do.call(rbind, combo_sdf_preped)
+par(mfrow=c(2,1), mar=c(3,3,2,1))
+sesameQC_plotBetaByDesign(combo_sdf, main="Before", xlab="\beta")
+sesameQC_plotBetaByDesign(combo_sdf_preped, main="After", xlab="\beta")
+
+```
+
+#Map dye bias before and after correction
+
+```{r}
+#| label: Linear vs Nonlinear dye bias correction
+#| eval: true
+#| echo: true
+#| cache: true
+
+#Subsetted 20000 probes from each sample for computational simplicity
+#Map dye bias before and after correction
+par(mfrow=c(1,2))
+sesameQC_plotRedGrnQQ(dyeBiasCorr(combo_sdf), main="Before") # linear correction
+sesameQC_plotRedGrnQQ(dyeBiasNL(combo_sdf), main="After")   # nonlinear correction
+rm(combo_sdf, combo_sdf_preped)
+
+```
+
+## Create a model using beta values
+
+```{r}
+#| label: Create Betas
+#| eval: false
+#| echo: true
+#| cache: false
+
+#Pull betas from preprocessed SDF
+betas = openSesame(sdf_preped, func = getBetas) 
+
+saveRDS(betas, file=paste0(outputs, "fig2_csf_betas_object.rds")) 
+
+#Match metadata from sdf
+analysis_metadata <- analysis_metadata[match(colnames(betas), analysis_metadata$Samples),]
+
+#Create summarized experiment, 
+se <- SummarizedExperiment(assays=list(counts=betas), colData=analysis_metadata)
+
+#Find CpGs that are not exclusively NAs (using Disease alone)
+se_ok = (checkLevels(assay(se), colData(se)$Disease))
+
+se = se[se_ok,]
+
+#Define reference tissues - syphilis for Disease
+colData(se)$Disease <- relevel(factor(colData(se)$Disease), "syphilis")
+
+```
+
+### Differentially Methylated Probes
+
+```{r}
+#| label: DMPs
+#| eval: false
+#| echo: true
+#| cache: false
+
+#Test Differential Methylation at each locus
+smry = DML(se, ~Disease)
+
+DMPs = summaryExtractTest(smry)
+DMPs$BonfPVal <- p.adjust(DMPs$FPval_Disease, n = length(DMPs$FPval_Disease), method = "bonferroni")
+DMPs$adjFDR <- p.adjust(DMPs$FPval_Disease, n = length(DMPs$FPval_Disease), method = "fdr")
+data(probe.features.epic)
+com.idx <- intersect(DMPs$Probe_ID, rownames(probe.features))
+non_match <- setdiff(DMPs$Probe_ID, rownames(probe.features))
+
+temp_DMPs <- DMPs[DMPs$Probe_ID %in% com.idx,]
+order_vector <- match(com.idx, rownames(probe.features))
+temp_probe_features <- probe.features[order_vector,]
+DMPs <- cbind(temp_DMPs, temp_probe_features)
+
+saveRDS(DMPs, file=paste0(outputs, "fig2_dmps_object.rds")) 
+```
+
+### Differentially Methylated Regions
+
+```{r}
+#| label: Differentially Methylated Regions (neurosyphilis vs syphilis)
+#| eval: false
+#| echo: true
+#| cache: false
+
+dmContrasts(smry)                       # pick a contrast from below
+
+DMRs = DMR(se, smry, "Diseaseneurosyphilis")       # merge CpGs to regions / segments
+
+# Map to genomic features
+data("probe.features.epic")
+features <- probe.features[match((DMRs$Probe_ID),rownames(probe.features)),]
+features$Probe_ID <- rownames(features)
+DMRs <- merge(DMRs, features, by = "Probe_ID")
+
+saveRDS(DMRs, file=paste0(outputs,"fig2_dmr_object.rds")) 
+
+```
+
+# Figure 2
+
+### 2-A - Cell Deconvolution
+
+```{r}
+#| label: 2-A 
+#| eval: true
+#| cache: true
+
+
+#Output
+results_meta <- analysis_metadata
+
+#Load reference for Epithelial Cells, Fibroblasts, and Generic Immune Cells; and reference for sub-immune cells
+data(centEpiFibIC.m)
+data(centBloodSub.m)
+
+#HEpiDISH 
+#HEpiDISH is an iterative hierarchical procedure of EpiDISH. HEpiDISH uses two distinct DNAm references, a primary reference for the estimation of fractions of several cell-types and a separate secondary non-overlapping DNAm reference for the estimation of underlying subtype fractions of one of the cell-type in the primary reference.
+
+cell_fractions_epidish <- hepidish(beta.m = betas, ref1.m = centEpiFibIC.m, ref2.m = centBloodSub.m, h.CT.idx = 3, method = 'RPC')
+
+cell_fractions_epidish <- cbind(cell_fractions_epidish, Samples = rownames(cell_fractions_epidish))
+results_meta <- merge(results_meta, cell_fractions_epidish, by = "Samples")
+
+col_to_keep = c(setdiff(colnames(results_meta), c("Epi", "Fib", "B", "NK", "CD4T", "CD8T", "Mono", "Neutro", "Eosino")), "Samples")
+col_to_keep = c(setdiff(colnames(results_meta), c("B", "NK", "CD4T", "CD8T", "Mono", "Neutro", "Eosino")), "Samples")
+
+cell_frequencies_long <- results_meta %>%
+  dplyr::select(all_of(col_to_keep), everything()) %>%
+  pivot_longer(cols = -col_to_keep, names_to = "celltype", values_to = "Value") %>% as.data.frame()
+cell_frequencies_long$Value <- as.numeric(cell_frequencies_long$Value) * 100
+
+##Compare population proportions statistically
+##Welsh's Test to check for differences in proportions in this small sample size (alternative can consider t test for larger samples
+#Alternatively can do Wilcoxen Rank Test (nonparametric), set STAT_TEST = "wilcoxen"
+
+STAT_TEST = "wilcox"
+
+comparisontype <- c("Disease") #Define which variable is the unit of analysis
+comparisongroups <- unique(results_meta[,comparisontype]) #Define what are the elements variables to be compared
+
+cell_prop_p_value_df <- data.frame()
+cell_types <- unique(cell_frequencies_long$celltype)
+for(b in cell_types) {
+  temp_frequencies_a <- as.numeric(results_meta[results_meta[[comparisontype]] %in% comparisongroups[1],][[b]])
+  temp_frequencies_b <- as.numeric(results_meta[results_meta[[comparisontype]] %in% comparisongroups[2],][[b]])
+  if (STAT_TEST == "welsh") {stat_result <- t.test(temp_frequencies_a, temp_frequencies_b, var.equal = FALSE)
+  } else if(STAT_TEST == "wilcox") {stat_result <- wilcox.test(temp_frequencies_a, temp_frequencies_b)}
+  tempdf <- data.frame(mean1 = mean(temp_frequencies_a), n1 = length(temp_frequencies_a), mean2 = mean(temp_frequencies_b), n2 = length(temp_frequencies_b), pval = stat_result$p.value)
+  cell_prop_p_value_df <- rbind(cell_prop_p_value_df, tempdf)
+}
+cell_prop_p_value_df <- cbind(cell_prop_p_value_df, AdjPval = p.adjust(cell_prop_p_value_df[,5], method = "fdr"))
+rownames(cell_prop_p_value_df) <- cell_types
+#cell_prop_p_value_df$cell_types <- cell_types
+cell_prop_p_value_df
+
+# Cell type proportion visualization 
+cell_frequencies_long$celltype_full <- recode(cell_frequencies_long$celltype, B = "B Cells", NK = "Natural Killer Cells", CD4T = "CD4 T Cells", CD8T = "CD8 T Cells", Eosino = "Eosinophils", Mono = "Monocytes", Neutro = "Neutrophils")
+
+figA = ggplot(cell_frequencies_long, aes(x = Disease, y = Value, fill = Disease)) +
+    geom_boxplot() + 
+    geom_dotplot(binaxis = "y", stackdir = "center", dotsize = 0.8) +
+    facet_wrap(~ celltype_full, scales = "free_y") +
+    labs(y = "Proportion") + 
+    scale_fill_discrete(labels = c('Neurosyphilis', 'Non-neurosyphilis')) + 
+    theme(
+        legend.position = "none", 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        panel.background = element_blank(),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_blank(),
+        panel.grid.major = element_line(color = "grey95"),
+        panel.grid.minor = element_line(color = "grey98")
+    )
+
+figA <- figA + 
+  stat_compare_means(label =  "p.signif", label.x = 1.5, label.y = 4, size = 5, hide.ns=TRUE) 
+figA
+
+```
+
+### 2-B - PCA
+
+```{r}
+#| label: 2-B
+#| eval: true
+#| cache: true
+
+#Match metadata from sdf
+analysis_metadata <- analysis_metadata[match(colnames(betas), analysis_metadata$Samples),]
+
+# Remove columns with more than a certain threshold of NAs
+threshold <- 0
+# Num CpGs included
+betas_clean <- betas[rowMeans(is.na(betas)) <= threshold,]
+# Perform PCA with the cleaned data
+pca_result <- prcomp(t(betas_clean), scale. = TRUE, center = TRUE)
+pca_scores <- predict(pca_result, newdata = t(betas_clean))
+pca_meta <- cbind(analysis_metadata, pca_scores)
+
+# Combine PCA results with metadata
+pca_data <- cbind(pca_result$x, analysis_metadata)
+pca_data$Sentrix_ID <- as.character(pca_data$Sentrix_ID)
+# Create a PCA plot using autoplot
+figB = ggplot(pca_meta, aes(x = PC1, y = PC2, col = Disease, shape = HIV)) +
+    geom_point(stat = "identity", size = 3) + 
+    theme_minimal() + 
+    scale_color_discrete(name = NULL, breaks = c("neurosyphilis", "syphilis"), labels = c('Neurosyphilis', 'Non-neurosyphilis')) + 
+    scale_shape_manual(values = c(15, 16), labels = c("HIV+", "HIV-")) +
+    theme(legend.position = "bottom")
+
+figB
+```
+
+### 2-C - Heatmap
+
+```{r}
+#| label: 2-C
+#| eval: true
+#| cache: true
+
+###Heatmap with ALL (non-NA) Betas
+rownames(pca_meta) <- pca_meta$Samples
+betas_noNAs <- betas[complete.cases(betas),]
+
+###Heatmap of Significant DMPs Syphilis vs Neurosyphilis
+#Sig DMP CpGs
+sig_cpgs_fromdmp <- DMPs %>% dplyr::filter(adjFDR  < 0.01, Eff_Disease > 0.1) %>% arrange(FPval_Disease) %>% dplyr::select(Probe_ID) 
+sig_cpgs_fromdmp <- sig_cpgs_fromdmp$Probe_ID
+sig_betas <- betas[sig_cpgs_fromdmp,]
+sig_betas_noNA <- sig_betas[complete.cases(sig_betas),]
+
+pca_meta$Log.HIV.Viral.Load <- log(pca_meta$Initial_copy_number)
+
+pca_meta$Disease <- factor(pca_meta$Disease, labels = c("neurosyphilis" = "Neurosyphilis", "syphilis" = "Non-neurosyphilis"))
+pca_meta$HIV <- factor(pca_meta$HIV, labels = c("HIV-infected_1" = "HIV+", "HIV-uninfected_0" = "HIV-"))
+pca_meta$Sex <- factor(pca_meta$Sex, labels = c("Female_2" = "Female", "Male_1" = "Male"))
+
+color_palette <- colorRampPalette(c("darkmagenta", "white", "gold3"))(100)
+disease_annotation_colors <- c("Neurosyphilis" = "#FF6969", "Non-neurosyphilis" = "#27B2B6")
+hiv_annotation_colors <- c("HIV+" = "black", "HIV-" = "grey")
+sex_colors <- c("Female" = "pink1", "Male" = "lightblue") 
+
+# Create the heatmap with row annotations
+figC = pheatmap(
+  mat = sig_betas_noNA,
+  color = color_palette, 
+  scale = "none",
+  fontsize_col = 5,
+  fontsize_row = 5,
+  legend = TRUE,
+  show_rownames = FALSE,
+  show_colnames = FALSE,
+  annotation_col = pca_meta[c("Disease", "HIV", "Log.HIV.Viral.Load", "Sex"), drop = FALSE], 
+    #labels = list(Disease = c("neurosyphilis" = "Neurosyphilis", "syphilis" = "Non-neurosyphilis"), HIV = c("HIV-infected_1" = "HIV+", "HIV-uninfected_0" = "HIV-"), Sex = c("Male_1" = "Male", "Female_2" = "Female")),
+  legend_labels = c("Sex", "Log HIV Viral Load", "HIV", "Disease"), 
+  annotation_colors = list(Disease = disease_annotation_colors, HIV = hiv_annotation_colors, Sex = sex_colors),
+  annotation_legend = TRUE,
+  width = 8,
+  height = 8,
+  #main = "Syphilis vs Neurosyphilis, Differentially Methylated CpGs"
+)
+figC
+```
+
+#### 2-C.1 - Supp. Table - Top DMPs
+
+```{r}
+write.csv(sig_cpgs_fromdmp, file=paste0(outputs, "supp.csf.ns.vs.s.dmps.csv"))
+
+```
+
+### 2-D - Pathway
+
+#### 2-D.1 - Overrepresented Pathways
+
+```{r}
+#| label: Overrep pathways
+#| cache: true
+
+#Set significance and effect size cutoffs
+adjFDR_threshold <- 0.01
+Effect_size_threshold <- 0.1
+
+DMR_genes_direct_df <- DMRs %>% dplyr::filter(Seg_Pval_adj  < adjFDR_threshold, Estimate > Effect_size_threshold) %>% arrange(Seg_Pval_adj)
+DMR_genes_direct <- DMR_genes_direct_df$Estimate
+names(DMR_genes_direct) <- DMR_genes_direct_df$EPIC.gene
+
+gostres_over <- gost(names(DMR_genes_direct), organism = "hsapiens", measure_underrepresentation = FALSE, significant = FALSE)
+gostresult_over <- gostres_over$result
+
+gostresult_over_lim <- gostresult_over[gostresult_over$p_value < 0.01,]
+gostresult_over_lim <- gostresult_over_lim[order(gostresult_over_lim$precision, decreasing = TRUE),]
+
+#Select pathways to show
+gostover_plot <- gostresult_over_lim[c(1152, 1131, 1052, 1166, 793, 634, 215, 240, 614, 132),]
+gostover_plot$name <- c("WP: Thermogenesis", "KEGG: Dopaminergic synapse", "GO:CC: actin cytoskeleton", "GO:BP: response to insulin", "GO:BP: neurogenesis", "TF: NF-KAPPAB1", "TF: TIEG1", "TF: KLF15", "GO:CC: vesicle", "TF Factor: Pax-5")
+
+gostover_plot$NegLogPVal <- -1 * log(gostover_plot$p_value, base = 10)
+gostover_plot <- gostover_plot[order(gostover_plot$NegLogPVal, decreasing = TRUE),]
+
+gostover_plot$name <- factor(gostover_plot$name, levels = rev(unique(gostover_plot$name)))
+
+figD = ggplot(head(gostover_plot, 10), aes(x = name, y = NegLogPVal)) +
+  geom_point(
+    aes(size = term_size),
+    alpha = 1
+  ) +
+  coord_flip() +
+    labs(y = "Negative Log P value", x = "Term Name", col = "Intersection Proportion") +
+  scale_color_gradient(high = "red4", low = "red", limits = c(0, 0.3)) +  # Adjust the limits as needed
+  scale_size_continuous(range = c(2, 8), breaks = c(10,100,1000,10000), limits = c(10,12000)) +  # Adjust size range as needed
+  scale_alpha_continuous(range = c(0.4, 1)) +  # Adjust alpha range as needed
+  theme_minimal()
+figD
+```
+
+#### Supp Table - Overrepresented Pathways
+
+```{r}
+
+write.csv(apply(gostresult_over_lim, 2, as.character), file=paste0(outputs, "supp.csf.ns.vs.s.gprof.over.csv"))
+
+```
+
+#### 2-D.2 - Underrepresented Pathways
+
+```{r}
+#| label: Underrep pathways
+#| cache: true
+
+gostres_under <- gost(names(DMR_genes_direct), organism = "hsapiens", measure_underrepresentation = TRUE, significant = FALSE)
+gostresult_under <- gostres_under$result
+
+gostresult_under_lim <- gostresult_under[gostresult_under$p_value < 0.01,]
+gostresult_under_lim <- gostresult_under_lim[order(gostresult_under_lim$precision, decreasing = FALSE),]
+
+#Select pathways to show
+gostunder_plot <- gostresult_under_lim[c(7, 169, 171, 204, 33, 2, 298, 75, 29, 10),]
+gostunder_plot$name <- c("GO:BP: mRNA trans splicing, via spliceosome", "GO:BP: RNA processing", "TF: FOSB:JUND", "TF: FOXP3", "TF: GATA-3", "GO:MF: pre-mRNA 5'-splice site binding", "TF: IRF-4", "TF: NFATc1", "TF: POU1F1", "GO:BP: protein targeting to ER") 
+gostunder_plot$NegLogPVal <- -1 * log(gostunder_plot$p_value, base = 10)
+gostunder_plot <- gostunder_plot[order(gostunder_plot$NegLogPVal, decreasing = TRUE),]
+
+gostunder_plot$name <- factor(gostunder_plot$name, levels = rev(unique(gostunder_plot$name)))
+
+figE = ggplot(head(gostunder_plot, 10), aes(x = name, y = NegLogPVal)) +
+  geom_point(
+    aes(size = term_size),
+    alpha = 1
+  ) +
+  coord_flip() +
+  #ggtitle("Sig Underrep DMR-gene-assoc Gene Sets") +
+    labs(y = "Negative Log P value", x = "Term Name", col = "Intersection Proportion") +
+  scale_color_gradient(high = "red4", low = "red", limits = c(0, 0.3)) +  # Adjust the limits as needed
+  scale_size_continuous(range = c(2, 8), breaks = c(10,100,1000,10000), limits = c(10,5000)) +  # Adjust size range as needed
+  scale_alpha_continuous(range = c(0.4, 1)) +  # Adjust alpha range as needed
+  theme_minimal()
+figE
+```
+
+#### Supp Table - Underrepresented Pathways
+
+```{r}
+
+write.csv(apply(gostresult_under_lim, 2, as.character), file=paste0(outputs, "supp.csf.ns.vs.s.gprof.under.csv"))
+```
+
+### 2-Supplemental
+
+#### Supp. 2.1 - Features Bar Plot
+
+```{r}
+#| cache: true
+
+###Features of DMPs vs background
+
+total_sum <- DMPs %>% dplyr::group_by(feature) %>% dplyr::summarise(Tot = n(), Perc_Tot = n()/nrow(DMPs), group = "All_CpGs")
+sig_dmps_sum <- DMPs %>% dplyr::filter(adjFDR < 0.05)
+sig_dmps_sum <- sig_dmps_sum %>% dplyr::group_by(feature) %>% dplyr::summarise(Tot = n(), Perc_Tot = n()/nrow(sig_dmps_sum), group = "Sig_CpGs")
+feature_sum <- rbind(total_sum, sig_dmps_sum)
+test <- cbind(feature_sum, sig = sig_dmps_sum)
+feature_sum2 <- cbind(total = total_sum, sig = sig_dmps_sum)
+
+# Perform binomial test
+pvals = c()
+for (l in feature_sum2$total.feature) {
+  total = sum(feature_sum2$total.Tot)
+  drawn = sum(feature_sum2$sig.Tot)
+  sig_drawn = feature_sum2[feature_sum2$total.feature  %in% l,]$sig.Tot
+  exp_prop = feature_sum2[feature_sum2$total.feature %in% l,]$total.Perc_Tot
+  binom_result <- binom.test(x = sig_drawn, n = drawn, p = exp_prop, alternative = "two.sided")
+  binom_p = binom_result$p.value
+  pvals <- c(pvals, binom_p)
+}
+feature_sum2$pval <- pvals
+feature_sum2 <- feature_sum2 |> mutate(show_symbol = case_when(pval < 10e-10 ~ "***", TRUE ~ " ")) 
+
+feature_sum2[,c("total.feature", "pval")]
+
+feature_plot <- ggplot(data = feature_sum, aes(x = feature, y = Perc_Tot, fill = group)) + 
+  geom_col(position = position_dodge()) + 
+  geom_text(data = feature_sum2, aes(x = total.feature, fill = total.group, label = show_symbol, y = 0.385)) +
+  labs(
+    x = "Feature",
+    y = "Proportion",
+    #title = "Significant vs All CpG Feature Enrichment"
+  ) +  scale_fill_discrete(name = "Group", labels = c("All CpGs", "Differentially Methylated CpGs")) + theme_minimal()
+
+feature_plot
+```
