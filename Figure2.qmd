@@ -134,7 +134,7 @@ for (k in colnames(rawQC_frame)[1:length(colnames(rawQC_frame))-1]) {
 
 ```
 
-## **Preprocessing**
+## Preprocessing
 
 Mask non-uniquely mapped probes (Q)
 
@@ -157,7 +157,7 @@ sdf_preped = openSesame(sdfs, prep="QCDPB", func=NULL)
 
 ```
 
-#Map before and after background subtraction (using NOOB)
+Map before and after background subtraction (using NOOB)
 
 ```{r}
 #| label: Map betas before and after background subtraction (NOOB)
@@ -176,7 +176,7 @@ sesameQC_plotBetaByDesign(combo_sdf_preped, main="After", xlab="\beta")
 
 ```
 
-#Map dye bias before and after correction
+Map dye bias before and after correction
 
 ```{r}
 #| label: Linear vs Nonlinear dye bias correction
@@ -230,7 +230,7 @@ colData(se)$Disease <- relevel(factor(colData(se)$Disease), "syphilis")
 #| echo: true
 #| cache: false
 
-#Test Differential Methylation at each locus
+# Test Differential Methylation at each locus
 smry = DML(se, ~Disease)
 
 DMPs = summaryExtractTest(smry)
@@ -280,15 +280,15 @@ saveRDS(DMRs, file=paste0(outputs,"fig2_dmr_object.rds"))
 #| cache: true
 
 
-#Output
+# Output
 results_meta <- analysis_metadata
 
-#Load reference for Epithelial Cells, Fibroblasts, and Generic Immune Cells; and reference for sub-immune cells
+# Load reference for Epithelial Cells, Fibroblasts, and Generic Immune Cells; and reference for sub-immune cells
 data(centEpiFibIC.m)
 data(centBloodSub.m)
 
-#HEpiDISH 
-#HEpiDISH is an iterative hierarchical procedure of EpiDISH. HEpiDISH uses two distinct DNAm references, a primary reference for the estimation of fractions of several cell-types and a separate secondary non-overlapping DNAm reference for the estimation of underlying subtype fractions of one of the cell-type in the primary reference.
+# HEpiDISH 
+# HEpiDISH is an iterative hierarchical procedure of EpiDISH. HEpiDISH uses two distinct DNAm references, a primary reference for the estimation of fractions of several cell-types and a separate secondary non-overlapping DNAm reference for the estimation of underlying subtype fractions of one of the cell-type in the primary reference.
 
 cell_fractions_epidish <- hepidish(beta.m = betas, ref1.m = centEpiFibIC.m, ref2.m = centBloodSub.m, h.CT.idx = 3, method = 'RPC')
 
@@ -324,7 +324,7 @@ for(b in cell_types) {
 }
 cell_prop_p_value_df <- cbind(cell_prop_p_value_df, AdjPval = p.adjust(cell_prop_p_value_df[,5], method = "fdr"))
 rownames(cell_prop_p_value_df) <- cell_types
-#cell_prop_p_value_df$cell_types <- cell_types
+# cell_prop_p_value_df$cell_types <- cell_types
 cell_prop_p_value_df
 
 # Cell type proportion visualization 
